@@ -3,58 +3,54 @@
 <head>
 <meta charset="UTF-8">
 <title>RealityBreaker</title>
-
 <style>
-body{
-  margin:0;
-  overflow:hidden;
-  background:transparent;
-}
+  html,body{
+    height:100%;
+    margin:0;
+    background:transparent;
+    overflow:hidden;
+  }
 
-#world{
-  position:absolute;
-  top:0;
-  left:0;
-}
+  #world{
+    position:fixed;
+    top:0;
+    left:0;
+    width:100%;
+    height:100%;
+    display:block;
+  }
 
-#playButton{
-  position:fixed;
-  top:50%;
-  left:50%;
-  transform:translate(-50%,-50%);
-  padding:20px 40px;
-  background:rgba(0,0,0,0.7);
-  color:white;
-  font-size:32px;
-  font-family:Arial,sans-serif;
-  border-radius:12px;
-  cursor:pointer;
-  z-index:9999;
-  user-select:none;
-}
+  #playButton{
+    position:fixed;
+    top:50%;
+    left:50%;
+    transform:translate(-50%,-50%);
+    padding:20px 40px;
+    background:rgba(0,0,0,0.7);
+    color:white;
+    font-size:32px;
+    font-family:Arial,sans-serif;
+    border-radius:12px;
+    cursor:pointer;
+    z-index:9999;
+    user-select:none;
+  }
 </style>
 </head>
-
 <body>
 
 <div id="playButton">▶ Play</div>
-
 <canvas id="world"></canvas>
 
 <script src="https://unpkg.com/matter-js@0.20.0/build/matter.min.js"></script>
-
 <script>
-
 const playButton = document.getElementById("playButton");
+const canvas = document.getElementById("world");
 
 playButton.addEventListener("click", () => {
-
-  // Do not request fullscreen or lock orientation.
-  // Just enable tilt controls and start the game.
   enableTiltControls();
   playButton.style.display = "none";
   startGame();
-
 });
 
 const {
@@ -69,14 +65,6 @@ const {
   Events
 } = Matter;
 
-const canvas = document.getElementById("world");
-
-function resizeCanvas(){
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-}
-resizeCanvas();
-
 const engine = Engine.create();
 engine.gravity.y = 1;
 
@@ -85,83 +73,128 @@ const render = Render.create({
   engine: engine,
   options: {
     wireframes: false,
-    background: "transparent"
+    background: "transparent",
+    width: window.innerWidth,
+    height: window.innerHeight,
+    pixelRatio: window.devicePixelRatio || 1
   }
 });
 
+// keep references to walls so we can remove them on resize
 let ground, ceiling, leftWall, rightWall;
+let box;
+let boxSize;
 
-function createWalls(){
-
+// resize helper that handles DPR and updates Matter render bounds
+function resizeCanvas(){
   const w = window.innerWidth;
   const h = window.innerHeight;
+  const dpr = window.devicePixelRatio || 1;
 
-  ground = Bodies.rectangle(w/2, h+250, w+500, 500, { isStatic:true, render:{visible:false} });
-  ceiling = Bodies.rectangle(w/2, -250, w+500, 500, { isStatic:true, render:{visible:false} });
-  leftWall = Bodies.rectangle(-250, h/2, 500, h+500, { isStatic:true, render:{visible:false} });
-  rightWall = Bodies.rectangle(w+250, h/2, 500, h+500, { isStatic:true, render:{visible:false} });
+  // CSS size (what the canvas appears as)
+  canvas.style.width = w + "px";
+  canvas.style.height = h + "px";
 
-  World.add(engine.world, [ground, ceiling, leftWall, rightWall]);
+  // actual pixel buffer size for crisp rendering
+  canvas.width = Math.floor(w * dpr);
+  canvas.height = Math.floor(h * dpr);
 
+  // scale the 2D context so drawing coordinates match CSS pixels
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  // update render options and bounds
+  render.canvas = canvas;
+  render.options.width = w;
+  render.options.height = h;
+  render.options.pixelRatio = dpr;
+  Render.lookAt(render, { min: { x: 0, y: 0 }, max: { x: w, y: h } });
 }
 
-createWalls();
-
-const boxSize = 120;
-
-const box = Bodies.rectangle(
-  window.innerWidth/2,
-  window.innerHeight/4,
-  boxSize,
-  boxSize,
-  {
-    restitution:0.8,
-    frictionAir:0.01,
-    friction:0.001,
-    render:{fillStyle:"#0A013F"}
-  }
-);
-
-World.add(engine.world, box);
-
-function keepBoxInside(){
-
+// create invisible walls that sit just outside the viewport
+function createWalls(){
   const w = window.innerWidth;
   const h = window.innerHeight;
-  const half = boxSize/2;
+
+  // remove any existing walls first
+  if (ground) World.remove(engine.world, [ground, ceiling, leftWall, rightWall]);
+
+  // make walls slightly outside the viewport so objects don't get stuck on edges
+  const thickness = 500;
+  ground = Bodies.rectangle(w/2, h + thickness/2, w + thickness*2, thickness, { isStatic:true, render:{visible:false} });
+  ceiling = Bodies.rectangle(w/2, -thickness/2, w + thickness*2, thickness, { isStatic:true, render:{visible:false} });
+  leftWall = Bodies.rectangle(-thickness/2, h/2, thickness, h + thickness*2, { isStatic:true, render:{visible:false} });
+  rightWall = Bodies.rectangle(w + thickness/2, h/2, thickness, h + thickness*2, { isStatic:true, render:{visible:false} });
+
+  World.add(engine.world, [ground, ceiling, leftWall, rightWall]);
+}
+
+// create or reset the main box, scaling size with viewport
+function createBox(){
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+
+  // scale box to be about 10% of the smaller viewport dimension, clamped
+  const base = Math.max(48, Math.min(160, Math.floor(Math.min(w, h) * 0.12)));
+  boxSize = base;
+
+  // if a box already exists remove it
+  if (box) World.remove(engine.world, box);
+
+  box = Bodies.rectangle(
+    w/2,
+    h/4,
+    boxSize,
+    boxSize,
+    {
+      restitution:0.8,
+      frictionAir:0.01,
+      friction:0.001,
+      render:{fillStyle:"#0A013F"}
+    }
+  );
+
+  World.add(engine.world, box);
+}
+
+// keep box inside visible area after resize
+function keepBoxInside(){
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  const half = boxSize / 2;
 
   let x = box.position.x;
   let y = box.position.y;
 
-  if(x < half) x = half;
-  if(x > w - half) x = w - half;
-  if(y < half) y = half;
-  if(y > h - half) y = h - half;
+  if (x < half) x = half;
+  if (x > w - half) x = w - half;
+  if (y < half) y = half;
+  if (y > h - half) y = h - half;
 
   Body.setPosition(box, { x, y });
-  Body.setVelocity(box, { x:0, y:0 });
-
+  Body.setVelocity(box, { x: 0, y: 0 });
 }
 
+// initial setup
+resizeCanvas();
+createWalls();
+createBox();
+
 window.addEventListener("resize", () => {
-
   resizeCanvas();
-
-  World.remove(engine.world, ground);
-  World.remove(engine.world, ceiling);
-  World.remove(engine.world, leftWall);
-  World.remove(engine.world, rightWall);
-
   createWalls();
-  keepBoxInside();
-
+  // recreate box with new scaled size but keep approximate position
+  const prevX = box ? box.position.x : window.innerWidth/2;
+  const prevY = box ? box.position.y : window.innerHeight/4;
+  createBox();
+  // place new box near previous position but clamped
+  Body.setPosition(box, { x: Math.min(Math.max(prevX, boxSize/2), window.innerWidth - boxSize/2), y: Math.min(Math.max(prevY, boxSize/2), window.innerHeight - boxSize/2) });
 });
 
+// interaction and controls (kept mostly as you had)
 let gravityEnabled = true;
-
 function toggleGravity(){
-
-  if(gravityEnabled){
+  if (gravityEnabled){
     engine.gravity.y = 1;
   } else {
     engine.gravity.y = 0;
@@ -170,57 +203,39 @@ function toggleGravity(){
       y: -0.01
     });
   }
-
 }
 
 let lastTap = 0;
-
 canvas.addEventListener("touchend", (e) => {
-
   const now = Date.now();
   const dt = now - lastTap;
-
-  if(dt < 300){
-
+  if (dt < 300){
     const touch = e.changedTouches[0];
-
     const dx = touch.clientX - box.position.x;
     const dy = touch.clientY - box.position.y;
-
     const dist = Math.sqrt(dx*dx + dy*dy);
-
-    if(dist < boxSize/1.2){
+    if (dist < boxSize/1.2){
       gravityEnabled = !gravityEnabled;
       toggleGravity();
     }
-
     lastTap = 0;
     return;
-
   }
-
   lastTap = now;
-
 });
 
 canvas.addEventListener("contextmenu", (e) => {
-
   e.preventDefault();
-
   const dx = e.clientX - box.position.x;
   const dy = e.clientY - box.position.y;
-
   const dist = Math.sqrt(dx*dx + dy*dy);
-
-  if(dist < boxSize/1.2){
+  if (dist < boxSize/1.2){
     gravityEnabled = !gravityEnabled;
     toggleGravity();
   }
-
 });
 
 const mouse = Mouse.create(canvas);
-
 const mouseConstraint = MouseConstraint.create(engine, {
   mouse: mouse,
   constraint: {
@@ -228,103 +243,69 @@ const mouseConstraint = MouseConstraint.create(engine, {
     render: { visible:false }
   }
 });
-
 World.add(engine.world, mouseConstraint);
 
 let lastMousePos = { x:0, y:0 };
-
 const INTERACT_RADIUS = 180;
 const SPEED_THRESHOLD = 8;
 const PUNCH_FORCE = 0.005;
 
 canvas.addEventListener("mousemove", (e) => {
-
   const mousePos = { x: e.clientX, y: e.clientY };
-
   const dx = mousePos.x - lastMousePos.x;
   const dy = mousePos.y - lastMousePos.y;
-
   const speed = Math.sqrt(dx*dx + dy*dy);
-
   lastMousePos = mousePos;
-
   const distX = mousePos.x - box.position.x;
   const distY = mousePos.y - box.position.y;
-
   const dist = Math.sqrt(distX*distX + distY*distY);
-
-  if(dist < INTERACT_RADIUS && speed > SPEED_THRESHOLD){
-
+  if (dist < INTERACT_RADIUS && speed > SPEED_THRESHOLD){
     Body.applyForce(box, box.position, {
       x: dx * PUNCH_FORCE,
       y: dy * PUNCH_FORCE
     });
-
   }
-
 });
 
 Events.on(engine, "beforeUpdate", () => {
-
   const maxSpeed = 50;
-
   let vx = box.velocity.x;
   let vy = box.velocity.y;
-
-  if(vx > maxSpeed) vx = maxSpeed;
-  if(vx < -maxSpeed) vx = -maxSpeed;
-  if(vy > maxSpeed) vy = maxSpeed;
-  if(vy < -maxSpeed) vy = -maxSpeed;
-
+  if (vx > maxSpeed) vx = maxSpeed;
+  if (vx < -maxSpeed) vx = -maxSpeed;
+  if (vy > maxSpeed) vy = maxSpeed;
+  if (vy < -maxSpeed) vy = -maxSpeed;
   Body.setVelocity(box, { x: vx, y: vy });
-
 });
 
 function enableTiltControls(){
-
   function handleTilt(event){
-
     let tiltLR = event.gamma;
     let tiltFB = event.beta;
-
-    if(tiltLR == null || tiltFB == null) return;
-
+    if (tiltLR == null || tiltFB == null) return;
     const FORCE = 0.0006;
-
     Body.applyForce(box, box.position, {
       x: tiltLR * FORCE,
       y: tiltFB * FORCE
     });
-
   }
-
-  if(typeof DeviceOrientationEvent !== "undefined" &&
+  if (typeof DeviceOrientationEvent !== "undefined" &&
      typeof DeviceOrientationEvent.requestPermission === "function"){
-
-    // Request permission on iOS devices; if granted, attach listener.
     DeviceOrientationEvent.requestPermission().then(response => {
-      if(response === "granted"){
+      if (response === "granted"){
         window.addEventListener("deviceorientation", handleTilt);
       }
-    }).catch(() => {
-      // ignore errors; do not block gameplay
-    });
-
+    }).catch(() => {});
   } else {
     window.addEventListener("deviceorientation", handleTilt);
   }
-
 }
 
 const runner = Runner.create();
-
 function startGame(){
-
   Runner.run(runner, engine);
   Render.run(render);
-
 }
 </script>
-
 </body>
 </html>
